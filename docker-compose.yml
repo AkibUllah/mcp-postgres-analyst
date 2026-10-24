@@ -1,0 +1,45 @@
+# Full stack: PostgreSQL with the demo shop data, and the MCP server over Streamable HTTP
+# connecting as a read-only role.  docker compose up --build  ->  http://localhost:8765/mcp
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shop
+      POSTGRES_PASSWORD: shop
+      POSTGRES_DB: shop
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shop -d shop"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  seed:
+    build: .
+    command: ["python", "scripts/seed_demo.py", "--database-url", "postgresql://shop:shop@postgres:5432/shop"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  analyst:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://analyst_ro:analyst_ro@postgres:5432/shop
+      ALLOWED_SCHEMAS: public
+      MCP_HTTP_TOKEN: ${MCP_HTTP_TOKEN:-}
+      LOG_LEVEL: INFO
+    ports:
+      - "${MCP_PORT:-8765}:8765"
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
