@@ -1,0 +1,9 @@
+# Convenience pin set; pyproject.toml is the source of truth.
+mcp>=2.3,<3
+sqlglot>=25,<31
+pydantic>=2.7
+pydantic-settings>=2.3
+pyyaml>=6.0
+uvicorn>=0.30
+starlette>=0.37
+psycopg[binary]>=3.1

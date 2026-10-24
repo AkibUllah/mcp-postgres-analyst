@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-postgres-analyst"
+version = "0.1.0"
+description = "Model Context Protocol server that gives AI assistants guarded, read-only access to PostgreSQL or SQLite: SQL allow-listing, LIMIT injection, timeouts, column masking, rate limits and an audit log."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Akib Jafor" }]
+requires-python = ">=3.10"
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Database",
+]
+dependencies = [
+  "mcp>=2.3,<3",
+  "sqlglot>=25,<31",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  "pyyaml>=6.0",
+  "uvicorn>=0.30",
+  "starlette>=0.37",
+]
+
+[project.optional-dependencies]
+postgres = [
+  "psycopg[binary]>=3.1",
+]
+dev = [
+  "psycopg[binary]>=3.1",
+  "pytest>=8.0",
+  "anyio>=4.4",
+  "httpx>=0.27",
+  "ruff>=0.5",
+]
+
+[project.scripts]
+mcp-pg-analyst = "pg_analyst.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/AkibUllah/mcp-postgres-analyst"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+pg_analyst = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+markers = [
+  "postgres: needs a live PostgreSQL in TEST_DATABASE_URL (skipped otherwise)",
+]
+filterwarnings = [
+  "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests", "scripts", "examples"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "W", "SIM"]
+ignore = ["B008", "SIM905"]
