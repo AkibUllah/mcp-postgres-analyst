@@ -1,0 +1,28 @@
+# Render blueprint: the MCP server over Streamable HTTP with the SQLite demo database baked into
+# the image. Point DATABASE_URL at your own PostgreSQL (read-only role) to analyse real data.
+# https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: mcp-postgres-analyst
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: "8765"
+      - key: MCP_HOST
+        value: 0.0.0.0
+      - key: DATABASE_URL
+        value: sqlite:////app/data/demo.db
+      - key: POLICY_PATH
+        value: /app/config/policy.yaml
+      - key: AUDIT_LOG_PATH
+        value: /app/logs/audit.jsonl
+      - key: LOG_LEVEL
+        value: INFO
+      # Clients send it as "Authorization: Bearer <token>"; copy it from the Render dashboard.
+      - key: MCP_HTTP_TOKEN
+        generateValue: true

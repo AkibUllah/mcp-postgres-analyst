@@ -1,0 +1,38 @@
+{
+  "name": "mcp-postgres-analyst",
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.11-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "18"
+    }
+  },
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "4gb"
+  },
+  "forwardPorts": [8765, 6274, 6277],
+  "portsAttributes": {
+    "8765": {
+      "label": "MCP server (Streamable HTTP at /mcp, health at /health)",
+      "onAutoForward": "notify"
+    },
+    "6274": {
+      "label": "MCP Inspector UI",
+      "onAutoForward": "notify"
+    },
+    "6277": {
+      "label": "MCP Inspector proxy",
+      "onAutoForward": "silent"
+    }
+  },
+  "postCreateCommand": "pip install -e \".[dev]\" && python scripts/seed_demo.py",
+  "postStartCommand": "bash .devcontainer/post-start.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "charliermarsh.ruff"
+      ]
+    }
+  }
+}
