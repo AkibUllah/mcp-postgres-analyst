@@ -1,0 +1,84 @@
+# Safety policy for the demo shop database. Copy and adapt for your own schema.
+#
+# Masking is applied to result columns after execution. A column is masked when its name
+# matches a rule, or when the guard can see that it was derived from a matching column
+# (aliases, expressions, CTEs and derived tables). count(...) is exempt.
+masking:
+  - column: email
+    strategy: email        # r***@gmail.com
+  - column: "*phone*"
+    strategy: phone        # +**********344
+  - column: nid
+    strategy: last4        # *********4567
+  - column: "*_nid"
+    strategy: last4
+  - column: trx_id
+    strategy: hash         # sha256:1a2b3c4d5e6f (stable, joinable, not reversible)
+  - column: address_line
+    strategy: redact
+
+# Never readable, not even through SELECT * (the column is dropped from results and from
+# describe_table, and referencing it explicitly is rejected).
+blocked_columns:
+  - customers.password_hash
+  - "*.api_secret"
+
+# Tables the assistant cannot see or query. Entries are "table" or "schema.table"; globs allowed.
+# PostgreSQL system tables with credentials or other sessions' queries are blocked by default.
+blocked_tables:
+  - staff_payroll
+  - "audit_*"
+
+# Functions blocked in addition to the built-in list (pg_sleep, dblink*, lo_*, pg_read_file, ...).
+blocked_functions:
+  - pg_stat_get_activity
+
+# Token buckets per tool; "default" covers tools without their own entry.
+rate_limits:
+  default: 60/minute
+  run_query: 30/minute
+  sample_rows: 30/minute
+  explain_query: 20/minute
+
+# Exposed as MCP resources (queries://saved, queries://saved/{name}) and runnable by name.
+saved_queries:
+  - name: revenue_by_month
+    description: Paid revenue in BDT per calendar month.
+    sql: |
+      SELECT substr(CAST(o.created_at AS TEXT), 1, 7) AS month,
+             count(*) AS orders,
+             round(sum(o.total_bdt), 2) AS revenue_bdt
+      FROM orders o
+      WHERE o.status IN ('paid', 'shipped', 'delivered')
+      GROUP BY 1
+      ORDER BY 1
+  - name: payment_method_mix
+    description: Share of successful payments by method (bKash, Nagad, card, cash on delivery).
+    sql: |
+      SELECT method,
+             count(*) AS payments,
+             round(sum(amount_bdt), 2) AS amount_bdt
+      FROM payments
+      WHERE status = 'success'
+      GROUP BY method
+      ORDER BY amount_bdt DESC
+  - name: top_products
+    description: Ten best-selling products by revenue.
+    sql: |
+      SELECT p.sku, p.name, p.category,
+             sum(oi.quantity) AS units,
+             round(sum(oi.quantity * oi.unit_price_bdt), 2) AS revenue_bdt
+      FROM order_items oi
+      JOIN products p ON p.id = oi.product_id
+      GROUP BY p.sku, p.name, p.category
+      ORDER BY revenue_bdt DESC
+      LIMIT 10
+  - name: orders_by_city
+    description: Order count and average basket per delivery city.
+    sql: |
+      SELECT delivery_city,
+             count(*) AS orders,
+             round(avg(total_bdt), 2) AS avg_basket_bdt
+      FROM orders
+      GROUP BY delivery_city
+      ORDER BY orders DESC
