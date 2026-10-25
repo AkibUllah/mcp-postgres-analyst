@@ -68,7 +68,9 @@ def test_transport_security_settings(settings: Settings) -> None:
     assert transport_security(settings) is None
     custom = settings.model_copy(update={"mcp_allowed_hosts": "analyst.example.com"})
     security = transport_security(custom)
-    assert security is not None and "analyst.example.com" in security.allowed_hosts
+    assert security is not None
+    assert security.allowed_hosts[-1] == "analyst.example.com"
+    assert security.allowed_origins[-2:] == ["https://analyst.example.com", "http://analyst.example.com"]
 
 
 @pytest.mark.anyio
