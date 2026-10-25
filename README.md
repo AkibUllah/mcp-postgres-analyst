@@ -4,6 +4,8 @@
 A Model Context Protocol server that lets AI assistants explore and query a PostgreSQL or SQLite database read-only, behind a SQL allow-list, automatic row limits, timeouts, column masking, rate limits and a JSONL audit log.
 
 [![CI](https://github.com/AkibUllah/mcp-postgres-analyst/actions/workflows/ci.yml/badge.svg)](https://github.com/AkibUllah/mcp-postgres-analyst/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/AkibUllah/mcp-postgres-analyst/actions/workflows/codeql.yml/badge.svg)](https://github.com/AkibUllah/mcp-postgres-analyst/actions/workflows/codeql.yml)
+[![Release](https://img.shields.io/github/v/release/AkibUllah/mcp-postgres-analyst)](https://github.com/AkibUllah/mcp-postgres-analyst/releases)
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11-blue)
 ![MCP SDK](https://img.shields.io/badge/mcp%20SDK-2.x-6e56cf)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -17,6 +19,16 @@ A Model Context Protocol server that lets AI assistants explore and query a Post
 | Local | `pip install -e ".[dev]" && python scripts/seed_demo.py && python examples/client.py` (no database server needed), or `docker compose up` for PostgreSQL |
 
 There is no GitHub Pages site for this repo: an MCP server has no browser UI, and the Codespace gives you the real thing.
+
+## Screenshots
+
+![SQL guard dry runs](docs/images/sql-guard.png)
+
+*`mcp-pg-analyst check` on a handful of statements: allowed queries are re-rendered with an injected `LIMIT`, while stacked statements, data-modifying CTEs, `pg_sleep`, whole-row references and blocked columns are rejected before reaching the database.*
+
+![Example client session](docs/images/client-session.png)
+
+*`examples/client.py` driving the server over stdio against the SQLite demo shop: schema listing, an aggregate query, masked customer rows, a rejected `DELETE`, the schema resource and the resulting audit log lines (JSON condensed to one line per field).*
 
 ## Why this exists
 
@@ -303,11 +315,11 @@ Coverage by area:
 
 ## Roadmap
 
-- Per-session rate limits and audit attribution in HTTP mode (session id / OAuth subject instead of one bucket per tool)
-- OAuth 2.1 resource-server mode using the SDK's `TokenVerifier`, so HTTP deployments can drop the shared token
-- Optional result sampling (`TABLESAMPLE`) for `sample_rows` on very large tables
-- MySQL adapter (sqlglot already speaks the dialect; the adapter needs read-only session handling)
-- Policy hot-reload on file change
+- [ ] Per-session rate limits and audit attribution in HTTP mode (session id / OAuth subject instead of one bucket per tool) (#1)
+- [ ] OAuth 2.1 resource-server mode using the SDK's `TokenVerifier`, so HTTP deployments can drop the shared token (#2)
+- [ ] Optional result sampling (`TABLESAMPLE`) for `sample_rows` on very large tables (#3)
+- [ ] MySQL adapter (sqlglot already speaks the dialect; the adapter needs read-only session handling) (#4)
+- [ ] Policy hot-reload on file change (#5)
 
 ## License
 
