@@ -70,7 +70,10 @@ def test_transport_security_settings(settings: Settings) -> None:
     security = transport_security(custom)
     assert security is not None
     assert security.allowed_hosts[-1] == "analyst.example.com"
-    assert security.allowed_origins[-2:] == ["https://analyst.example.com", "http://analyst.example.com"]
+    assert security.allowed_origins[-2:] == [
+        "https://analyst.example.com",
+        "http://analyst.example.com",
+    ]
 
 
 @pytest.mark.anyio
