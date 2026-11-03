@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Per-session rate limits in HTTP mode: token buckets are keyed by the MCP session id (the remote address for sessionless requests, a fixed `stdio` identity over stdio), so one client can no longer drain another's budget (#1).
+- Audit entries record `session`, `client` (reported name/version) and `remote`; `mcp-pg-analyst audit --session <id>` filters by session (#1).
+- `RATE_LIMIT_SCOPE`, `RATE_LIMIT_MAX_SESSIONS` and `RATE_LIMIT_IDLE_SECONDS` settings; limiter state is bounded by an LRU cap and idle eviction (#1).
 - CodeQL analysis for Python and GitHub Actions on pushes and pull requests to `main` and on a weekly schedule.
 - Dependabot version updates for pip, Docker and GitHub Actions, with minor and patch updates grouped per ecosystem.
 - README screenshots: SQL guard dry runs and an example client session.
@@ -16,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Rate-limited tool errors state the limit and a retry-after hint (`retry after 1.4s`, rounded up), also logged as `retry_after_s` (#1).
 - CI workflow runs with a read-only `GITHUB_TOKEN`.
 
 ## [0.1.0] - 2026-10-25
