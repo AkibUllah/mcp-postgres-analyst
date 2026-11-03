@@ -148,7 +148,16 @@ class AnalystService:
             raise
         finally:
             elapsed = round((time.perf_counter() - started) * 1000, 2)
-            self.audit.record(tool, status, duration_ms=elapsed, args=audit_args, **extra)
+            self.audit.record(
+                tool,
+                status,
+                session=caller.session,
+                client=caller.client,
+                remote=caller.remote,
+                duration_ms=elapsed,
+                args=audit_args,
+                **extra,
+            )
 
     def _limit_key(self, caller: Caller) -> str:
         return caller.key if self.settings.rate_limit_scope == "session" else GLOBAL_LIMIT_KEY

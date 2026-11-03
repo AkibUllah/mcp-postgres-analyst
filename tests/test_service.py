@@ -119,6 +119,26 @@ def test_rate_limits_are_kept_per_caller(settings: Settings) -> None:
     assert limited.run_query("SELECT 1").row_count == 1  # stdio has its own bucket
 
 
+def test_audit_entries_are_attributed_to_the_caller(
+    service: AnalystService, settings: Settings
+) -> None:
+    http = Caller(
+        key="session:9f1c", session="9f1c", client="notebook-client/0.1.0", remote="10.0.0.7"
+    )
+    service.run_query("SELECT 1", caller=http)
+    with pytest.raises(AnalystError):
+        service.run_query("DELETE FROM orders", caller=http)
+    service.list_schemas()
+    first, second, local = audit_lines(settings.audit_log_path)[-3:]
+    for entry in (first, second):
+        assert entry["session"] == "9f1c"
+        assert entry["client"] == "notebook-client/0.1.0"
+        assert entry["remote"] == "10.0.0.7"
+    assert second["status"] == "rejected"
+    assert local["session"] == "stdio"
+    assert "client" not in local and "remote" not in local
+
+
 def test_global_scope_shares_buckets_between_callers(settings: Settings) -> None:
     policy = Policy.model_validate({"rate_limits": {"run_query": "1/minute"}})
     shared = AnalystService(
