@@ -47,6 +47,7 @@ T = TypeVar("T")
 
 MAX_SAMPLE_ROWS = 50
 CATALOG_TTL_SECONDS = 300.0
+GLOBAL_LIMIT_KEY = "*"
 
 
 class AnalystError(Exception):
@@ -100,7 +101,12 @@ class AnalystService:
             default_limit=settings.effective_default_limit,
             max_rows=settings.max_rows,
         )
-        self.limiter = ToolRateLimiter(self.policy, clock)
+        self.limiter = ToolRateLimiter(
+            self.policy,
+            clock,
+            max_callers=settings.rate_limit_max_sessions,
+            idle_seconds=settings.rate_limit_idle_seconds,
+        )
         self.audit = AuditLog(settings.audit_log_path)
         self._clock = clock
         self._catalog_lock = threading.Lock()
@@ -115,7 +121,7 @@ class AnalystService:
         started = time.perf_counter()
         status, extra = "ok", {}
         try:
-            self.limiter.check(tool, caller.key)
+            self.limiter.check(tool, self._limit_key(caller))
             result = fn()
             if isinstance(result, QueryResult):
                 extra = {
@@ -143,6 +149,9 @@ class AnalystService:
         finally:
             elapsed = round((time.perf_counter() - started) * 1000, 2)
             self.audit.record(tool, status, duration_ms=elapsed, args=audit_args, **extra)
+
+    def _limit_key(self, caller: Caller) -> str:
+        return caller.key if self.settings.rate_limit_scope == "session" else GLOBAL_LIMIT_KEY
 
     def _visible(self, schema: str, table: str) -> bool:
         return not self.guard.table_blocked(table.lower(), schema.lower())

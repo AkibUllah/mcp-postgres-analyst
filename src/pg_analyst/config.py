@@ -23,6 +23,12 @@ class Settings(BaseSettings):
 
     audit_log_path: Path | None = Path("logs/audit.jsonl")
 
+    # "session": one set of token buckets per MCP session (stdio is a single session);
+    # "global": every client shares one set, as in 0.1.0.
+    rate_limit_scope: Literal["session", "global"] = "session"
+    rate_limit_max_sessions: int = Field(default=1000, ge=1)
+    rate_limit_idle_seconds: float = Field(default=600.0, gt=0)
+
     mcp_host: str = "127.0.0.1"
     # PORT is what Render, Fly and Heroku-style platforms inject.
     mcp_port: int = Field(
