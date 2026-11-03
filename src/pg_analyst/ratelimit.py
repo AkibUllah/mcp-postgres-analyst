@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 from collections import OrderedDict
@@ -19,10 +20,18 @@ DEFAULT_IDLE_SECONDS = 600.0
 
 
 class RateLimited(Exception):
-    def __init__(self, tool: str, retry_after: float) -> None:
-        super().__init__(f"rate limit exceeded for {tool}; retry in {retry_after:.1f}s")
+    def __init__(self, tool: str, retry_after: float, limit: RateLimit | None = None) -> None:
+        # Rounded up so that retrying after exactly the advertised delay succeeds.
+        retry_after = math.ceil(retry_after * 10) / 10
+        if limit is None:
+            self.allowance = "a limited rate"
+        else:
+            noun = "call" if limit.capacity == 1 else "calls"
+            self.allowance = f"{limit.capacity} {noun} per {limit.per_seconds:g}s"
+        super().__init__(f"{tool} allows {self.allowance}; retry after {retry_after:.1f}s")
         self.tool = tool
         self.retry_after = retry_after
+        self.limit = limit
 
 
 @dataclass
@@ -102,7 +111,7 @@ class ToolRateLimiter:
                 bucket = state.buckets[tool] = _Bucket(limit, float(limit.capacity), now)
             wait = bucket.take(now)
         if wait > 0:
-            raise RateLimited(tool, wait)
+            raise RateLimited(tool, wait, limit)
 
     def forget(self, caller: str) -> None:
         with self._lock:

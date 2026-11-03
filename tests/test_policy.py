@@ -55,6 +55,7 @@ def test_token_bucket_per_tool_refills_over_time() -> None:
     with pytest.raises(RateLimited) as info:
         limiter.check("run_query")
     assert info.value.retry_after == pytest.approx(5.0)
+    assert str(info.value) == "run_query allows 2 calls per 10s; retry after 5.0s"
     limiter.check("list_schemas")  # no default rule: unlimited
     now[0] = 5.0
     limiter.check("run_query")
@@ -167,3 +168,20 @@ def test_rate_limit_settings_from_environment(monkeypatch: pytest.MonkeyPatch) -
     ):
         with pytest.raises(ValidationError):
             Settings(_env_file=None, **bad)
+
+
+def test_retry_after_is_rounded_up_so_the_hint_is_safe() -> None:
+    now = [0.0]
+    policy = Policy.model_validate({"rate_limits": {"run_query": "3/10s"}})
+    limiter = ToolRateLimiter(policy, clock=lambda: now[0])
+    for _ in range(3):
+        limiter.check("run_query", "a")
+    now[0] = 1.0
+    with pytest.raises(RateLimited) as info:
+        limiter.check("run_query", "a")
+    # A token takes 3.33s to refill; 2.33s remain after one second.
+    assert info.value.retry_after == 2.4
+    now[0] += info.value.retry_after
+    limiter.check("run_query", "a")
+    assert RateLimited("x", 0.01).retry_after == 0.1
+    assert "a limited rate" in str(RateLimited("x", 1.0))

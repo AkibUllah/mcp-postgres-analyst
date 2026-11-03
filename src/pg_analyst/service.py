@@ -53,10 +53,11 @@ GLOBAL_LIMIT_KEY = "*"
 class AnalystError(Exception):
     """A failure reported back to the MCP client as a tool error (``code: message``)."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, retry_after: float | None = None) -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
+        self.retry_after = retry_after
 
 
 def to_json_value(value: Any) -> Any:
@@ -132,8 +133,12 @@ class AnalystService:
                 }
             return result
         except RateLimited as exc:
-            status, extra = "rate_limited", {"reason": str(exc)}
-            raise AnalystError("rate_limited", str(exc)) from exc
+            scope = "per session" if self.settings.rate_limit_scope == "session" else "in total"
+            message = (
+                f"{exc.tool} allows {exc.allowance} {scope}; retry after {exc.retry_after:.1f}s"
+            )
+            status, extra = "rate_limited", {"reason": message, "retry_after_s": exc.retry_after}
+            raise AnalystError("rate_limited", message, retry_after=exc.retry_after) from exc
         except QueryRejected as exc:
             status, extra = "rejected", {"code": exc.code, "reason": exc.message}
             raise AnalystError(exc.code, exc.message) from exc
