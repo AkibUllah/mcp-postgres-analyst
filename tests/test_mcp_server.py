@@ -6,6 +6,11 @@ import json
 
 import pytest
 from mcp import Client
+from mcp.types import Implementation
+
+from pg_analyst.policy import Policy
+from pg_analyst.server import build_server
+from pg_analyst.service import AnalystService
 
 pytestmark = pytest.mark.anyio
 
@@ -107,3 +112,25 @@ async def test_saved_query_tool(server) -> None:
         result = await client.call_tool("run_saved_query", {"name": "payment_method_mix"})
     methods = {row[0] for row in result.structured_content["rows"]}
     assert methods == {"bkash", "nagad", "card", "cod"}
+
+
+async def test_in_process_calls_are_audited_as_stdio_with_client_info(service, server) -> None:
+    info = Implementation(name="report-bot", version="2.1.0")
+    async with Client(server, client_info=info) as client:
+        await client.call_tool("list_schemas", {})
+        await client.call_tool("run_query", {"sql": "UPDATE orders SET status = 'x'"})
+    entries = service.audit.tail(2)
+    assert [e["status"] for e in entries] == ["ok", "rejected"]
+    assert all(e["session"] == "stdio" and e["client"] == "report-bot/2.1.0" for e in entries)
+
+
+async def test_rate_limited_tool_error_carries_the_retry_hint(settings) -> None:
+    policy = Policy.model_validate({"rate_limits": {"find_columns": "1/minute"}})
+    server = build_server(AnalystService(settings, policy=policy, clock=lambda: 0.0))
+    async with Client(server) as client:
+        first = await client.call_tool("find_columns", {"query": "email"})
+        second = await client.call_tool("find_columns", {"query": "email"})
+    assert not first.is_error and second.is_error
+    assert second.content[0].text.endswith(
+        "rate_limited: find_columns allows 1 call per 60s per session; retry after 60.0s"
+    )

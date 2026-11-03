@@ -8,7 +8,7 @@ from collections.abc import Callable
 from typing import Annotated, TypeVar
 
 import anyio
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ResourceNotFoundError, ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
@@ -16,6 +16,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from pg_analyst import __version__
+from pg_analyst.caller import Caller, resolve_caller
 from pg_analyst.config import Settings
 from pg_analyst.models import (
     ColumnSearchResult,
@@ -49,6 +50,20 @@ async def _run(fn: Callable[[], T]) -> T:
         raise ToolError(str(exc)) from exc
 
 
+def caller_of(ctx: Context) -> Caller:
+    """Identify the client behind a tool call (session id over HTTP, ``stdio`` otherwise)."""
+    request = ctx.request_context.request
+    peer = getattr(request, "client", None)
+    params = ctx.session.client_params
+    info = params.client_info if params is not None else None
+    return resolve_caller(
+        ctx.headers,
+        client_name=info.name if info else None,
+        client_version=info.version if info else None,
+        remote=peer.host if peer else None,
+    )
+
+
 def build_server(service: AnalystService) -> MCPServer:
     """Create the MCP server for an existing service (tests inject one with a temp database)."""
     mcp = MCPServer(
@@ -63,28 +78,34 @@ def build_server(service: AnalystService) -> MCPServer:
     # -- tools ------------------------------------------------------------------------------
 
     @mcp.tool(title="List schemas and tables", annotations=READ_ONLY)
-    async def list_schemas() -> SchemaListing:
+    async def list_schemas(ctx: Context) -> SchemaListing:
         """List the schemas and tables you can query, with row estimates and table comments."""
-        return await _run(service.list_schemas)
+        caller = caller_of(ctx)
+        return await _run(lambda: service.list_schemas(caller=caller))
 
     @mcp.tool(title="Describe a table", annotations=READ_ONLY)
     async def describe_table(
+        ctx: Context,
         table: Annotated[str, Field(description="Table name, optionally schema-qualified")],
     ) -> TableDescription:
         """Columns (type, nullability, default, comment, masking), primary key, foreign keys and
         indexes of one table."""
-        return await _run(lambda: service.describe_table(table))
+        caller = caller_of(ctx)
+        return await _run(lambda: service.describe_table(table, caller=caller))
 
     @mcp.tool(title="Sample rows", annotations=READ_ONLY)
     async def sample_rows(
+        ctx: Context,
         table: Annotated[str, Field(description="Table name, optionally schema-qualified")],
         n: Annotated[int, Field(ge=1, le=50, description="Number of rows")] = 5,
     ) -> QueryResult:
         """Return the first n rows of a table, with masking applied."""
-        return await _run(lambda: service.sample_rows(table, n))
+        caller = caller_of(ctx)
+        return await _run(lambda: service.sample_rows(table, n, caller=caller))
 
     @mcp.tool(title="Run a read-only query", annotations=READ_ONLY)
     async def run_query(
+        ctx: Context,
         sql: Annotated[str, Field(description="One SELECT or WITH ... SELECT statement")],
         limit: Annotated[
             int | None,
@@ -93,28 +114,35 @@ def build_server(service: AnalystService) -> MCPServer:
     ) -> QueryResult:
         """Execute a single read-only SELECT. The statement is parsed and validated first; the
         executed SQL (with its enforced LIMIT) is returned in `sql`."""
-        return await _run(lambda: service.run_query(sql, limit))
+        caller = caller_of(ctx)
+        return await _run(lambda: service.run_query(sql, limit, caller=caller))
 
     @mcp.tool(title="Explain a query", annotations=READ_ONLY)
     async def explain_query(
+        ctx: Context,
         sql: Annotated[str, Field(description="One SELECT or WITH ... SELECT statement")],
     ) -> ExplainResult:
         """Show the database's query plan without executing the query."""
-        return await _run(lambda: service.explain_query(sql))
+        caller = caller_of(ctx)
+        return await _run(lambda: service.explain_query(sql, caller=caller))
 
     @mcp.tool(title="Find columns", annotations=READ_ONLY)
     async def find_columns(
+        ctx: Context,
         query: Annotated[str, Field(description="Text to look for in column names and comments")],
     ) -> ColumnSearchResult:
         """Search every accessible table for columns whose name or comment contains the text."""
-        return await _run(lambda: service.find_columns(query))
+        caller = caller_of(ctx)
+        return await _run(lambda: service.find_columns(query, caller=caller))
 
     @mcp.tool(title="Run a saved query", annotations=READ_ONLY)
     async def run_saved_query(
+        ctx: Context,
         name: Annotated[str, Field(description="Name from the queries://saved resource")],
     ) -> QueryResult:
         """Run one of the vetted queries published in the policy file."""
-        return await _run(lambda: service.run_saved_query(name))
+        caller = caller_of(ctx)
+        return await _run(lambda: service.run_saved_query(name, caller=caller))
 
     # -- resources --------------------------------------------------------------------------
 
