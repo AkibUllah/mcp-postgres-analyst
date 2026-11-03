@@ -105,7 +105,13 @@ def test_rate_limit_is_enforced_and_audited(settings: Settings) -> None:
     with pytest.raises(AnalystError) as info:
         limited.run_query("SELECT 1")
     assert info.value.code == "rate_limited"
-    assert audit_lines(settings.audit_log_path)[-1]["status"] == "rate_limited"
+    assert info.value.retry_after == 30.0
+    assert str(info.value) == (
+        "rate_limited: run_query allows 2 calls per 60s per session; retry after 30.0s"
+    )
+    entry = audit_lines(settings.audit_log_path)[-1]
+    assert entry["status"] == "rate_limited" and entry["retry_after_s"] == 30.0
+    assert entry["reason"] == info.value.message
 
 
 def test_rate_limits_are_kept_per_caller(settings: Settings) -> None:
@@ -148,6 +154,7 @@ def test_global_scope_shares_buckets_between_callers(settings: Settings) -> None
     with pytest.raises(AnalystError) as info:
         shared.run_query("SELECT 1", caller=Caller(key="session:b", session="b"))
     assert info.value.code == "rate_limited"
+    assert "1 call per 60s in total" in info.value.message
 
 
 def test_limiter_settings_reach_the_limiter(settings: Settings) -> None:
