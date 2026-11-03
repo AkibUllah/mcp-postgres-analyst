@@ -44,6 +44,7 @@ Every team that connects an assistant to its database ends up with the same ques
 - Statement timeout: `statement_timeout` on PostgreSQL, a progress-handler interrupt on SQLite
 - Column masking from a YAML policy (`email`, `phone`, `last4`, `hash`, `redact`) that follows aliases, expressions, CTEs and derived tables; blocked columns disappear even from `SELECT *`; whole-row tricks like `row_to_json(c)` are rejected
 - Per-tool token-bucket rate limits and an append-only JSONL audit log of every call (ok, rejected, timeout, rate limited)
+- Per-session rate limits and audit attribution in HTTP mode: buckets are keyed by the MCP session id, every audit line records `session`, `client` and `remote`, rate-limited calls get a retry-after hint, and the session map is bounded (LRU cap plus idle eviction)
 - Both transports: stdio for desktop clients, Streamable HTTP with optional bearer token, DNS-rebinding protection and a `/health` endpoint
 - Deterministic demo database (fictional Bangladeshi online shop: customers, products, orders, bKash/Nagad/card/COD payments) seeded identically into SQLite or PostgreSQL
 
@@ -58,7 +59,7 @@ flowchart LR
     CD --> S[MCPServer<br/>tools · resources · prompts]
     HC --> AUTH[BearerTokenMiddleware<br/>/health is public] --> S
     S --> SVC[AnalystService]
-    SVC --> RL[ToolRateLimiter<br/>token bucket per tool]
+    SVC --> RL[ToolRateLimiter<br/>token bucket per session + tool]
     SVC --> G[SqlGuard<br/>sqlglot AST checks<br/>LIMIT rewrite · lineage]
     G --> DB[(Database adapter)]
     DB --> PG[(PostgreSQL<br/>READ ONLY txn<br/>statement_timeout)]
@@ -89,8 +90,8 @@ Key decisions:
 | Result caps | runaway result sets (`MAX_ROWS`, `MAX_RESULT_BYTES`) | `guard.py`, `service.py` |
 | Timeouts | long-running queries (`STATEMENT_TIMEOUT_MS`) | `db.py` |
 | Read-only session | writes, DDL, `nextval` side effects, even if the guard were bypassed | `db.py`, `docker/initdb` |
-| Rate limits | an agent loop hammering the database | `ratelimit.py` |
-| Audit log | "what did it run?" questions afterwards | `audit.py` |
+| Rate limits | an agent loop hammering the database; one HTTP client starving the others | `ratelimit.py`, `caller.py` |
+| Audit log | "what did it run, and which session ran it?" questions afterwards | `audit.py` |
 
 Known limits, stated plainly: masking hides values in results but a determined caller can still learn about a masked column through filters (`WHERE email LIKE 'a%'` changes the row count). Treat masking as protection against accidental exposure in transcripts, and keep truly secret columns in `blocked_columns` or out of the role's grants. Lineage is name-based across the query, so it can over-mask a same-named column from another table; it errs on the safe side.
 
@@ -214,6 +215,24 @@ All stdio clients launch the same command. Use absolute paths; the server reads 
 
 Failures come back as tool errors with a stable code prefix, e.g. `not_select: ...`, `blocked_function: ...`, `timeout: ...`, `rate_limited: ...`, `unknown_table: ...`.
 
+### Rate limits
+
+Token buckets come from `rate_limits` in the policy file (`default` covers tools without their own entry). With `RATE_LIMIT_SCOPE=session` (the default) every caller gets its own set of buckets:
+
+| Transport | Caller key |
+| --- | --- |
+| stdio (one client per process) | fixed `stdio` |
+| Streamable HTTP, session-based protocol (`Mcp-Session-Id`) | the session id the SDK issued |
+| Streamable HTTP without a session (protocol 2026-07-28, stateless) | the remote address |
+
+Two HTTP sessions never drain each other's buckets. `RATE_LIMIT_SCOPE=global` restores one shared set for all clients, which is the stricter choice when clients can open new sessions at will. A rejected call says what the limit is and when to retry:
+
+```text
+rate_limited: run_query allows 30 calls per 60s per session; retry after 1.4s
+```
+
+The hint is rounded up, so retrying after exactly that delay succeeds. Limiter state is bounded: a caller idle for `RATE_LIMIT_IDLE_SECONDS` is forgotten (the timeout is never shorter than the longest policy window, so forgetting cannot hand out extra tokens), and beyond `RATE_LIMIT_MAX_SESSIONS` the least recently active caller is dropped. Behind a reverse proxy, sessionless requests all come from the proxy address unless uvicorn trusts its forwarded headers (`FORWARDED_ALLOW_IPS`).
+
 Example `run_query` result on the demo data (delivered revenue by customer city):
 
 ```json
@@ -247,11 +266,14 @@ and with personal data involved:
 
 ### Audit log
 
-One JSON object per line in `AUDIT_LOG_PATH`; `mcp-pg-analyst audit -n 20` prints the tail.
+One JSON object per line in `AUDIT_LOG_PATH`; `mcp-pg-analyst audit -n 20` prints the tail and `mcp-pg-analyst audit --session <id>` only one session's calls.
+
+Every entry is attributed: `session` is `stdio` over stdio and the MCP session id over Streamable HTTP (absent for sessionless requests), `client` is the `name/version` the client reported in its client info (self-reported, recorded but never trusted), and `remote` is the peer address in HTTP mode.
 
 ```json
-{"ts": "2026-10-24T18:07:11.722+00:00", "tool": "sample_rows", "status": "ok", "duration_ms": 2.15, "args": {"table": "customers", "n": 3}, "sql": "SELECT * FROM \"main\".\"customers\" LIMIT 4", "rows": 3, "masked": ["email", "phone", "nid", "address_line"]}
-{"ts": "2026-10-24T18:07:11.743+00:00", "tool": "run_query", "status": "rejected", "duration_ms": 0.61, "args": {"sql": "DELETE FROM orders", "limit": null}, "code": "not_select", "reason": "only SELECT / WITH queries are allowed, got DELETE"}
+{"ts": "2026-10-24T18:07:11.722+00:00", "tool": "sample_rows", "status": "ok", "session": "stdio", "client": "desktop-client/1.4.2", "duration_ms": 2.15, "args": {"table": "customers", "n": 3}, "sql": "SELECT * FROM \"main\".\"customers\" LIMIT 4", "rows": 3, "masked": ["email", "phone", "nid", "address_line"]}
+{"ts": "2026-10-24T18:07:11.743+00:00", "tool": "run_query", "status": "rejected", "session": "5ba7ebe0ce764ad389be82cd75ed68da", "client": "report-bot/2.1.0", "remote": "10.0.0.7", "duration_ms": 0.61, "args": {"sql": "DELETE FROM orders", "limit": null}, "code": "not_select", "reason": "only SELECT / WITH queries are allowed, got DELETE"}
+{"ts": "2026-10-24T18:07:12.010+00:00", "tool": "run_query", "status": "rate_limited", "session": "5ba7ebe0ce764ad389be82cd75ed68da", "client": "report-bot/2.1.0", "remote": "10.0.0.7", "duration_ms": 0.05, "args": {"sql": "SELECT 1", "limit": null}, "reason": "run_query allows 30 calls per 60s per session; retry after 1.4s", "retry_after_s": 1.4}
 ```
 
 ## Configuration
@@ -265,6 +287,9 @@ One JSON object per line in `AUDIT_LOG_PATH`; `mcp-pg-analyst audit -n 20` print
 | `MAX_RESULT_BYTES` | `262144` | result payload budget; rows beyond it are dropped and flagged |
 | `STATEMENT_TIMEOUT_MS` | `5000` | per-statement timeout |
 | `AUDIT_LOG_PATH` | `logs/audit.jsonl` | JSONL audit file; empty disables |
+| `RATE_LIMIT_SCOPE` | `session` | `session`: policy limits apply per MCP session; `global`: shared by all clients |
+| `RATE_LIMIT_MAX_SESSIONS` | `1000` | most callers with limiter state; the least recently active is dropped beyond it |
+| `RATE_LIMIT_IDLE_SECONDS` | `600` | limiter state of a caller idle this long is dropped (at least the longest policy window) |
 | `MCP_HOST` / `MCP_PORT` (or `PORT`) | `127.0.0.1` / `8765` | HTTP bind |
 | `MCP_HTTP_TOKEN` | – | bearer token required on `/mcp` |
 | `MCP_ALLOWED_HOSTS` | – | extra Host values for DNS-rebinding protection |
@@ -283,10 +308,11 @@ mcp-postgres-analyst/
 │   ├── masking.py       # email / phone / last4 / hash / redact
 │   ├── policy.py        # YAML policy models
 │   ├── db.py            # SQLite and PostgreSQL adapters (read-only, timeouts, introspection)
-│   ├── ratelimit.py     # token buckets per tool
+│   ├── ratelimit.py     # token buckets per session and tool, bounded caller map
+│   ├── caller.py        # caller identity: stdio, MCP session id or remote address
 │   ├── audit.py         # JSONL audit log
 │   ├── demo.py          # deterministic demo shop data
-│   └── cli.py           # serve | check | seed | audit
+│   └── cli.py           # serve | check | seed | audit [--session]
 ├── config/policy.yaml
 ├── scripts/seed_demo.py
 ├── examples/client.py   # SDK client over stdio or HTTP
@@ -299,7 +325,7 @@ mcp-postgres-analyst/
 ## Testing
 
 ```bash
-make test        # 164 tests, no database server needed (~9 s)
+make test        # 187 tests, no database server needed (~9 s)
 make test-pg     # 4 more against PostgreSQL: docker compose up -d postgres first
 make lint
 ```
@@ -308,14 +334,14 @@ Coverage by area:
 
 - **Guard** (100+ cases across both dialects): stacked statements, DML/DDL, data-modifying CTEs, `SELECT INTO`, `FOR UPDATE`, `COPY`/`SET`/`PRAGMA`/`ATTACH`, comment and dollar-quote smuggling, blocked functions in every position (schema-qualified, quoted, upper-case, nested in CTEs and sub-queries), system and policy tables, blocked columns, whole-row references, LIMIT injection/clamping/`LIMIT ALL`/`FETCH FIRST`/unions/offsets, lineage through aliases and CTEs
 - **Masking and policy**: every strategy, glob rules, taint-based masking, rate-limit parsing, token-bucket refill with a fake clock
+- **Sessions**: independent buckets per caller, LRU cap, idle eviction that never grants extra tokens, retry-after rounding, caller resolution from headers, audit attribution and `audit --session`
 - **Service**: masking of direct and derived columns, `SELECT *` hiding, row and byte caps, timeout cancellation, audit entries for ok/rejected/rate-limited calls, introspection, saved queries
 - **Protocol**: tools, schemas and annotations, structured content, tool errors, resources, templates and prompts through the SDK's in-process `Client`
-- **Transports**: Streamable HTTP through uvicorn on a free port (health, 401s, authenticated round trip) and stdio through a spawned subprocess
+- **Transports**: Streamable HTTP through uvicorn on a free port (health, 401s, authenticated round trip, two sessions with independent rate limits, sessionless fallback) and stdio through a spawned subprocess
 - **PostgreSQL** (CI service container): catalog comments, FK introspection, saved queries, `statement_timeout`, read-only transaction rejects DDL
 
 ## Roadmap
 
-- [ ] Per-session rate limits and audit attribution in HTTP mode (session id / OAuth subject instead of one bucket per tool) (#1)
 - [ ] OAuth 2.1 resource-server mode using the SDK's `TokenVerifier`, so HTTP deployments can drop the shared token (#2)
 - [ ] Optional result sampling (`TABLESAMPLE`) for `sample_rows` on very large tables (#3)
 - [ ] MySQL adapter (sqlglot already speaks the dialect; the adapter needs read-only session handling) (#4)
