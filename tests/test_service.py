@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from pg_analyst.caller import Caller
 from pg_analyst.config import Settings
 from pg_analyst.policy import Policy
 from pg_analyst.service import AnalystError, AnalystService, to_json_value
@@ -105,6 +106,17 @@ def test_rate_limit_is_enforced_and_audited(settings: Settings) -> None:
         limited.run_query("SELECT 1")
     assert info.value.code == "rate_limited"
     assert audit_lines(settings.audit_log_path)[-1]["status"] == "rate_limited"
+
+
+def test_rate_limits_are_kept_per_caller(settings: Settings) -> None:
+    policy = Policy.model_validate({"rate_limits": {"run_query": "1/minute"}})
+    limited = AnalystService(settings, policy=policy, clock=lambda: 0.0)
+    alice, bob = Caller(key="session:a", session="a"), Caller(key="session:b", session="b")
+    limited.run_query("SELECT 1", caller=alice)
+    with pytest.raises(AnalystError):
+        limited.run_query("SELECT 1", caller=alice)
+    assert limited.run_query("SELECT 1", caller=bob).row_count == 1
+    assert limited.run_query("SELECT 1").row_count == 1  # stdio has its own bucket
 
 
 def test_sample_rows_validates_and_masks(service: AnalystService) -> None:
