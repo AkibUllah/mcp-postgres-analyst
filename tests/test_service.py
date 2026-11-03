@@ -119,6 +119,25 @@ def test_rate_limits_are_kept_per_caller(settings: Settings) -> None:
     assert limited.run_query("SELECT 1").row_count == 1  # stdio has its own bucket
 
 
+def test_global_scope_shares_buckets_between_callers(settings: Settings) -> None:
+    policy = Policy.model_validate({"rate_limits": {"run_query": "1/minute"}})
+    shared = AnalystService(
+        settings.model_copy(update={"rate_limit_scope": "global"}), policy=policy, clock=lambda: 0.0
+    )
+    shared.run_query("SELECT 1", caller=Caller(key="session:a", session="a"))
+    with pytest.raises(AnalystError) as info:
+        shared.run_query("SELECT 1", caller=Caller(key="session:b", session="b"))
+    assert info.value.code == "rate_limited"
+
+
+def test_limiter_settings_reach_the_limiter(settings: Settings) -> None:
+    tuned = AnalystService(
+        settings.model_copy(update={"rate_limit_max_sessions": 7, "rate_limit_idle_seconds": 3600})
+    )
+    assert tuned.limiter.max_callers == 7
+    assert tuned.limiter.idle_seconds == 3600
+
+
 def test_sample_rows_validates_and_masks(service: AnalystService) -> None:
     result = service.sample_rows("payments", 3)
     assert result.row_count == 3

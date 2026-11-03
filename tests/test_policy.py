@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
+from pg_analyst.config import Settings
 from pg_analyst.policy import Policy, RateLimit, load_policy
 from pg_analyst.ratelimit import RateLimited, ToolRateLimiter
 
@@ -144,3 +146,24 @@ def test_forget_and_invalid_limiter_settings() -> None:
         ToolRateLimiter(policy, max_callers=0)
     with pytest.raises(ValueError):
         ToolRateLimiter(policy, idle_seconds=0)
+
+
+def test_rate_limit_settings_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RATE_LIMIT_SCOPE", "global")
+    monkeypatch.setenv("RATE_LIMIT_MAX_SESSIONS", "25")
+    monkeypatch.setenv("RATE_LIMIT_IDLE_SECONDS", "120")
+    settings = Settings(_env_file=None)
+    assert settings.rate_limit_scope == "global"
+    assert settings.rate_limit_max_sessions == 25
+    assert settings.rate_limit_idle_seconds == 120
+    for name in ("RATE_LIMIT_SCOPE", "RATE_LIMIT_MAX_SESSIONS", "RATE_LIMIT_IDLE_SECONDS"):
+        monkeypatch.delenv(name)
+    defaults = Settings(_env_file=None)
+    assert (defaults.rate_limit_scope, defaults.rate_limit_max_sessions) == ("session", 1000)
+    for bad in (
+        {"rate_limit_scope": "user"},
+        {"rate_limit_max_sessions": 0},
+        {"rate_limit_idle_seconds": 0},
+    ):
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None, **bad)
