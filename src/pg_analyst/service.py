@@ -21,6 +21,7 @@ import sqlglot
 from sqlglot import exp
 
 from pg_analyst.audit import AuditLog
+from pg_analyst.caller import STDIO, Caller
 from pg_analyst.config import Settings
 from pg_analyst.db import Database, DatabaseError, QueryTimeout, TableInfo, TableSummary, connect
 from pg_analyst.guard import GuardedQuery, QueryRejected, SqlGuard
@@ -108,11 +109,13 @@ class AnalystService:
 
     # -- plumbing ---------------------------------------------------------------------------
 
-    def _call(self, tool: str, audit_args: dict[str, Any], fn: Callable[[], T]) -> T:
+    def _call(
+        self, tool: str, audit_args: dict[str, Any], fn: Callable[[], T], caller: Caller
+    ) -> T:
         started = time.perf_counter()
         status, extra = "ok", {}
         try:
-            self.limiter.check(tool)
+            self.limiter.check(tool, caller.key)
             result = fn()
             if isinstance(result, QueryResult):
                 extra = {
@@ -238,7 +241,7 @@ class AnalystService:
 
     # -- tools ------------------------------------------------------------------------------
 
-    def list_schemas(self) -> SchemaListing:
+    def list_schemas(self, *, caller: Caller = STDIO) -> SchemaListing:
         def run() -> SchemaListing:
             grouped: dict[str, list[TableEntry]] = {}
             for t in self._tables():
@@ -251,9 +254,9 @@ class AnalystService:
                 schemas=[SchemaEntry(name=s, tables=ts) for s, ts in grouped.items()],
             )
 
-        return self._call("list_schemas", {}, run)
+        return self._call("list_schemas", {}, run, caller)
 
-    def describe_table(self, table: str) -> TableDescription:
+    def describe_table(self, table: str, *, caller: Caller = STDIO) -> TableDescription:
         def run() -> TableDescription:
             info = self.resolve_table(table)
             hidden = {
@@ -286,16 +289,18 @@ class AnalystService:
                 indexes=info.indexes,
             )
 
-        return self._call("describe_table", {"table": table}, run)
+        return self._call("describe_table", {"table": table}, run, caller)
 
-    def run_query(self, sql: str, limit: int | None = None) -> QueryResult:
+    def run_query(
+        self, sql: str, limit: int | None = None, *, caller: Caller = STDIO
+    ) -> QueryResult:
         def run() -> QueryResult:
             guarded = self.guard.check(sql, limit=limit, catalog=self._guard_catalog())
             return self._run_guarded(guarded)
 
-        return self._call("run_query", {"sql": sql, "limit": limit}, run)
+        return self._call("run_query", {"sql": sql, "limit": limit}, run, caller)
 
-    def sample_rows(self, table: str, n: int = 5) -> QueryResult:
+    def sample_rows(self, table: str, n: int = 5, *, caller: Caller = STDIO) -> QueryResult:
         def run() -> QueryResult:
             if n < 1 or n > MAX_SAMPLE_ROWS:
                 raise AnalystError("bad_limit", f"n must be between 1 and {MAX_SAMPLE_ROWS}")
@@ -305,17 +310,19 @@ class AnalystService:
             guarded = self.guard.check(sql, limit=n, catalog=self._guard_catalog())
             return self._run_guarded(guarded)
 
-        return self._call("sample_rows", {"table": table, "n": n}, run)
+        return self._call("sample_rows", {"table": table, "n": n}, run, caller)
 
-    def explain_query(self, sql: str) -> ExplainResult:
+    def explain_query(self, sql: str, *, caller: Caller = STDIO) -> ExplainResult:
         def run() -> ExplainResult:
             guarded = self.guard.check(sql, catalog=self._guard_catalog())
             plan = self.db.explain(guarded.sql, timeout_ms=self.settings.statement_timeout_ms)
             return ExplainResult(sql=guarded.sql, plan=plan)
 
-        return self._call("explain_query", {"sql": sql}, run)
+        return self._call("explain_query", {"sql": sql}, run, caller)
 
-    def find_columns(self, query: str, limit: int = 50) -> ColumnSearchResult:
+    def find_columns(
+        self, query: str, limit: int = 50, *, caller: Caller = STDIO
+    ) -> ColumnSearchResult:
         def run() -> ColumnSearchResult:
             needle = query.strip().lower()
             if len(needle) < 2:
@@ -340,9 +347,9 @@ class AnalystService:
                         )
             return ColumnSearchResult(query=query, matches=matches[: max(1, min(limit, 200))])
 
-        return self._call("find_columns", {"query": query}, run)
+        return self._call("find_columns", {"query": query}, run, caller)
 
-    def run_saved_query(self, name: str) -> QueryResult:
+    def run_saved_query(self, name: str, *, caller: Caller = STDIO) -> QueryResult:
         def run() -> QueryResult:
             saved = self.policy.saved_query(name)
             if saved is None:
@@ -351,7 +358,7 @@ class AnalystService:
             guarded = self.guard.check(saved.sql, catalog=self._guard_catalog())
             return self._run_guarded(guarded)
 
-        return self._call("run_saved_query", {"name": name}, run)
+        return self._call("run_saved_query", {"name": name}, run, caller)
 
     # -- resources --------------------------------------------------------------------------
 
