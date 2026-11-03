@@ -44,8 +44,15 @@ class AuditLog:
         logger.info("audit %s %s", tool, status)
         return entry
 
-    def tail(self, n: int = 20) -> list[dict[str, Any]]:
+    def tail(self, n: int = 20, *, session: str | None = None) -> list[dict[str, Any]]:
+        """The last ``n`` entries, optionally only those of one session."""
         if self.path is None or not self.path.exists():
             return []
-        lines = self.path.read_text(encoding="utf-8").splitlines()[-n:]
-        return [json.loads(line) for line in lines if line.strip()]
+        entries = [
+            json.loads(line)
+            for line in self.path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        if session is not None:
+            entries = [e for e in entries if e.get("session") == session]
+        return entries[-n:] if n > 0 else []

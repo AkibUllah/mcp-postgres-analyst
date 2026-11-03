@@ -98,7 +98,7 @@ def cmd_seed(args: argparse.Namespace, settings: Settings) -> int:
 def cmd_audit(args: argparse.Namespace, settings: Settings) -> int:
     from pg_analyst.audit import AuditLog
 
-    for entry in AuditLog(settings.audit_log_path).tail(args.n):
+    for entry in AuditLog(settings.audit_log_path).tail(args.n, session=args.session):
         print(json.dumps(entry, ensure_ascii=False))
     return 0
 
@@ -126,6 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     audit = sub.add_parser("audit", help="print the last audit log entries")
     audit.add_argument("-n", type=int, default=20)
+    audit.add_argument("--session", default=None, help="only entries of this session id")
     audit.set_defaults(func=cmd_audit)
     return parser
 
